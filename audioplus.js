@@ -48,7 +48,7 @@
 	///to connect a <audio> or <video> element to the node chain
 	/// which does not work on iOS or Safari.
 
-	AudioPlus.prototype.player = function(player, callback) {
+	AudioPlus.prototype.player = function(player) {
 		var that = this;
 
 		if (! (player instanceof HTMLMediaElement) )
@@ -70,8 +70,6 @@
 			that._disconnectAll();
 			that.paused = this.paused;
 		});
-
-		if (callback instanceof Function) callback.call(this);
 
 		return this;
 	};
