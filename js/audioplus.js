@@ -40,7 +40,6 @@
 		this.loop = false;
 		//this is the audio buffer source, not audio URL
 		this.source = null;
-		this.master = null;
 		this.nodes = [];
 		///timer for fading master
 		this._fadeTimer = 0;
@@ -48,6 +47,8 @@
 		this._playTime = 0;
 		this._pauseTime = 0;
 		this._deltaTime = 0;
+		///creates a master gain node, deattached from nodes string
+		this.master = this.createGain(1);
 	}
 
 	///to connect a <audio> or <video> element to the node chain
@@ -142,7 +143,6 @@
 	//connects all nodes from source to destination
 	AudioPlus.prototype._connectAll = function() {
 		var l = this.nodes.length, i = 0;
-		if (!this.master) this.master = this.createGain(1);
 		if (l >= 1) {
 			this.source.connect(this.nodes[0]);
 			for (i = 0; i < l; i++) {
@@ -169,10 +169,8 @@
 	AudioPlus.prototype.play = function() {
 		if (!this.paused) return;
 
-		if (this.master) {
-			this.master.gain.cancelScheduledValues(0);
-			this.master.gain.value = 1;
-		}
+		this.master.gain.cancelScheduledValues(0);
+
 		this._createSource();
 		this._connectAll();
 		this.source.start(0, this._deltaTime);
@@ -197,7 +195,7 @@
 		else this.pause();
 	};
 
-	///fades to level at an exponential rate in t time (seconds) and callback
+	///fades to level in t seconds and callback
 	AudioPlus.prototype.fadeTo = function (level, t, callback) {
 		var gain = this.master.gain;
 		if (this.paused) return;
@@ -212,10 +210,9 @@
 
 	AudioPlus.prototype.fadeIn = function (t) {
 		var that = this, value;
-		value = this.master.gain.value = 0.0001;
 		this.master.gain.value = 0.0001;
 		this.play();
-		this.fadeTo(value, t||1);
+		this.fadeTo(1, t||1);
 	};
 
 	AudioPlus.prototype.fadeOut = function (t) {
