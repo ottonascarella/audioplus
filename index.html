@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>AudioPlus</title>
+	<script src="js/audioplus.js"></script>
+</head>
+<body>
+
+<script>
+var audio = new AudioPlus();
+
+audio.onload = function() {
+	this.play();
+};
+audio.loop = 1;
+audio.load("audio/track.mp3");
+
+</script>
+
+</body>
+</html>

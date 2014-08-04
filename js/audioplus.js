@@ -30,15 +30,20 @@
 (function(window) {
 
 	window.AudioContext = window.AudioContext || window.webkitAudioContext || false;
-	if (!window.AudioContext) throw new Error("WebAudio not available");
+	if (!window.AudioContext) throw new Error("Web Audio not available");
 
 
 
 	function AudioPlus() {
 		this.context = new AudioContext();
 		this.paused = true;
+		this.loop = false;
+		//this is the audio buffer source, not audio URL
 		this.source = null;
-		this.nodes = [null];
+		this.master = null;
+		this.nodes = [];
+		///timer for fading master
+		this._fadeTimer = 0;
 		this._buffer = null;
 		this._playTime = 0;
 		this._pauseTime = 0;
@@ -47,12 +52,12 @@
 
 	///to connect a <audio> or <video> element to the node chain
 	/// which does not work on iOS or Safari.
-
 	AudioPlus.prototype.player = function(player) {
 		var that = this;
 
-		if (! (player instanceof HTMLMediaElement) )
-			throw new Error("Argument is not a valid <audio> or <video> element.");
+		if (! (player instanceof HTMLMediaElement) ) {
+			throw new Error("Player interface takes a <video> or <audio> element as parameter.");
+		}
 
 		this.source = this.nodes[0] = this.context.createMediaElementSource(player);
 
@@ -75,39 +80,41 @@
 	};
 
 	///loads and decodes audio files
-	AudioPlus.prototype.load = function(src, onSuccess, onFail) {
-		var req = new XMLHttpRequest(), that = this;
+	AudioPlus.prototype.load = function(url) {
+		var that = this,
+			req = new XMLHttpRequest();
+
 
 		req.onreadystatechange = function() {
 			if (this.readyState === 4) { /// when audio finished loading
 
 				// handles requests with bad statuses
-				if (this.status !== 200) throw new Error("Request of ", src, " failed. code:", this.status);
+				if (this.status !== 200) throw new Error("Request of " + url + " failed. code: " + this.status);
 
 				/// try decode audio
 				that.context.decodeAudioData(this.response, function(buffer) {
 					/// on decode sucess, create source
 					console.log("decoded");
 					that._buffer = buffer;
-					onSuccess.call(that);
+
+					///if there's a onload handler, call it.
+					if (that.onload) that.onload.call(that);
 
 				}, function() {
-					throw new Error("Decoding of ", src, " buffer error!");
+					throw new Error("Error decoding " + url);
 				});
 
 
 			}
 		};
 
-		req.ontimeout = function() {
-			throw new Error("Request of ", src, " timed out.");
-		};
+		req.ontimeout = this.ontimeout;
 
 		req.onerror = function() {
-			throw new Error("Request of ", src, " error.");
+			throw new Error("Error requesting " + url);
 		};
 
-		req.open('GET', src, true);
+		req.open('GET', url, true);
 		req.responseType = 'arraybuffer';
 		req.send();
 
@@ -119,33 +126,39 @@
 		var that = this;
 		if (!(that._buffer instanceof AudioBuffer)) {
 			that._buffer = null;
-			throw new Error ("AudioContext buffer has never been initialized. Call contructor with valid buffer as argument!");
+			throw new Error ("AudioContext buffer has never been initialized! Are you sure the audio decoded properly?");
 		}
 
-		this.source = this.nodes[0] = this.context.createBufferSource();
+		this.source = this.context.createBufferSource();
 		console.log("buffer created");
 		this.source.buffer = this._buffer;
-		this.source.loop = true;
+		this.source.loop = this.loop;
 	};
 
 	AudioPlus.prototype._destroySource = function() {
-		this.nodes[0] = null;
 		this.source = null;
 	};
 
 	//connects all nodes from source to destination
 	AudioPlus.prototype._connectAll = function() {
-		var l = this.nodes.length-1, i = 0;
-		if (l <= 0) return;
-		for (i = 0; i < l; i++) {
-			this.nodes[i].connect(this.nodes[i+1]);
-		}
-		this.nodes[l].connect(this.context.destination);
+		var l = this.nodes.length, i = 0;
+		if (!this.master) this.master = this.createGain(1);
+		if (l >= 1) {
+			this.source.connect(this.nodes[0]);
+			for (i = 0; i < l; i++) {
+				this.nodes[i].connect(this.nodes[i+1]);
+			}
+			this.nodes[l].connect(this.master);
+		} else
+			this.source.connect(this.master);
+
+		this.master.connect(this.context.destination);
 	};
 
 	//disconnects all nodes from source to destination
 	AudioPlus.prototype._disconnectAll = function() {
 		var l = this.nodes.length-1, i = 0;
+		this.source.disconnect();
 		if (l <= 0) return;
 		for (i = 0; i < l; i++) {
 			if (this.nodes[i].disconnect) this.nodes[i].disconnect();
@@ -156,6 +169,10 @@
 	AudioPlus.prototype.play = function() {
 		if (!this.paused) return;
 
+		if (this.master) {
+			this.master.gain.cancelScheduledValues(0);
+			this.master.gain.value = 1;
+		}
 		this._createSource();
 		this._connectAll();
 		this.source.start(0, this._deltaTime);
@@ -164,14 +181,15 @@
 	};
 
 	///pauses audio
-	AudioPlus.prototype.pause = function () {
+	AudioPlus.prototype.pause = function (t) {
 		if (this.paused) return;
-		this.source.stop(0);
-		this._pauseTime = this.context.currentTime;
-		this._deltaTime += (this._pauseTime - this._playTime);
-		this._disconnectAll();
-		this._destroySource();
-		this.paused = true;
+		var that = this, gain = this.master.gain;
+		that.source.stop(0);
+		that._pauseTime = that.context.currentTime;
+		that._deltaTime += (that._pauseTime - that._playTime);
+		that._disconnectAll();
+		that._destroySource();
+		that.paused = true;
 	};
 
 	AudioPlus.prototype.toggle = function () {
@@ -179,12 +197,42 @@
 		else this.pause();
 	};
 
-	///returns currentTime, or sets current time
+	///fades to level at an exponential rate in t time (seconds) and callback
+	AudioPlus.prototype.fadeTo = function (level, t, callback) {
+		var gain = this.master.gain;
+		if (this.paused) return;
+		gain.cancelScheduledValues(0);
+		gain.setValueAtTime(gain.value, this.context.currentTime);
+		gain.exponentialRampToValueAtTime(level, this.context.currentTime+t);
+		clearTimeout(this._fadeTimer);
+		if (callback) {
+			this._fadeTimer = setTimeout(callback, 1001*t);
+		}
+	};
+
+	AudioPlus.prototype.fadeIn = function (t) {
+		var that = this, value;
+		value = this.master.gain.value = 0.0001;
+		this.master.gain.value = 0.0001;
+		this.play();
+		this.fadeTo(value, t||1);
+	};
+
+	AudioPlus.prototype.fadeOut = function (t) {
+		var that = this;
+		this.fadeTo(0.0001, t||1, function() {
+			that.pause();
+		});
+	};
+
+
+	///returns currentTime, or sets currenTime
 	AudioPlus.prototype.time = function (t) {
 
 		if (typeof t === "number") {
 			if (!this.paused) {
 				this.source.stop(0);
+				this.paused = true;
 				this._disconnectAll();
 				this._destroySource();
 			}
@@ -205,7 +253,16 @@
 		return (this._buffer) ? this._buffer.duration : 0;
 	};
 
-	//adds anylyzer object to chain and returns it
+	//adds gain node to chain and returns it
+	AudioPlus.prototype.createGain = function(deattached) {
+		var ctx = this.context,
+			gain = ctx.createGain();
+
+		if (!deattached) this.nodes.push(gain);
+		return gain;
+	};
+
+	//adds anylyzer node to chain and returns it
 	AudioPlus.prototype.createAnalyser = function(size) {
 		var ctx = this.context,
 			analyser = ctx.createAnalyser();
