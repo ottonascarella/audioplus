@@ -1,4 +1,10 @@
-///requestAnimationFrame polyfill
+//////////////////////////
+///     AudioPlus      ///
+/// by Otto Nascarella ///
+//////////////////////////
+
+
+///requestAnimationFrame polyfill by someone I can't remember...sorry!
 (function(window) {
 
 	var lastTime = 0;
@@ -26,12 +32,10 @@
 }(window));
 
 
-///AudioPlus
 (function(window) {
 
 	window.AudioContext = window.AudioContext || window.webkitAudioContext || false;
 	if (!window.AudioContext) throw new Error("Web Audio not available");
-
 
 
 	function AudioPlus() {
@@ -80,7 +84,7 @@
 		return this;
 	};
 
-	///loads and decodes audio files
+	///loads and decodes audio files using XHR request
 	AudioPlus.prototype.load = function(url) {
 		var that = this,
 			req = new XMLHttpRequest();
@@ -143,7 +147,7 @@
 	//connects all nodes from source to destination
 	AudioPlus.prototype._connectAll = function() {
 		var l = this.nodes.length, i = 0;
-		if (l >= 1) {
+		if (l) {
 			this.source.connect(this.nodes[0]);
 			for (i = 0; i < l; i++) {
 				this.nodes[i].connect(this.nodes[i+1]);
@@ -159,43 +163,65 @@
 	AudioPlus.prototype._disconnectAll = function() {
 		var l = this.nodes.length-1, i = 0;
 		this.source.disconnect();
-		if (l <= 0) return;
+		if (!l) return;
 		for (i = 0; i < l; i++) {
 			if (this.nodes[i].disconnect) this.nodes[i].disconnect();
 		}
 	};
 
 	//connects all nodes and plays audio
-	AudioPlus.prototype.play = function() {
+	AudioPlus.prototype.play = function(level) {
 		if (!this.paused) return;
-
-		this.master.gain.cancelScheduledValues(0);
 
 		this._createSource();
 		this._connectAll();
+
+		///cancel possible fader automations
+		this.master.gain.cancelScheduledValues(0);
+		if (typeof level == "number") this.master.gain.value = level;
+
 		this.source.start(0, this._deltaTime);
 		this._playTime = this._pauseTime = this.context.currentTime;
 		this.paused = false;
+
+		return this;
 	};
 
 	///pauses audio
 	AudioPlus.prototype.pause = function (t) {
 		if (this.paused) return;
-		var that = this, gain = this.master.gain;
-		that.source.stop(0);
-		that._pauseTime = that.context.currentTime;
-		that._deltaTime += (that._pauseTime - that._playTime);
-		that._disconnectAll();
-		that._destroySource();
-		that.paused = true;
+		this.source.stop(0);
+		// saves current time in case you want to play again.
+		this._pauseTime = this.context.currentTime;
+		this._deltaTime += (this._pauseTime - this._playTime);
+		this._disconnectAll();
+		this._destroySource();
+		this.paused = true;
+
+		return this;
+	};
+
+	///pauses audio
+	AudioPlus.prototype.stop = function (t) {
+		this.source.stop(0);
+		this._pauseTime = 0;
+		this._deltaTime = 0;
+		this._disconnectAll();
+		this._destroySource();
+		this.paused = true;
+
+		return this;
 	};
 
 	AudioPlus.prototype.toggle = function () {
 		if (this.paused) this.play();
 		else this.pause();
+
+		return this;
 	};
 
 	///fades to level in t seconds and callback
+	///FILE BUG ON FIREFOX -> NOT RETURNING gain.value correctly
 	AudioPlus.prototype.fadeTo = function (level, t, callback) {
 		var gain = this.master.gain;
 		if (this.paused) return;
@@ -210,8 +236,7 @@
 
 	AudioPlus.prototype.fadeIn = function (t) {
 		var that = this, value;
-		this.master.gain.value = 0.0001;
-		this.play();
+		this.play(0.0001);
 		this.fadeTo(1, t||1);
 	};
 
@@ -224,17 +249,22 @@
 
 
 	///returns currentTime, or sets currenTime
+	///FIX >>> on loop, time keeps increasing.
 	AudioPlus.prototype.time = function (t) {
 
 		if (typeof t === "number") {
 			if (!this.paused) {
+				/// not calling this.pause() cos don't want to track as if it was paused (tempo)
 				this.source.stop(0);
 				this.paused = true;
 				this._disconnectAll();
 				this._destroySource();
 			}
+
+			/// calculates negative time (if needed)
 			if (t < 0) this._deltaTime = (this.duration() + t);
 			else this._deltaTime = t;
+
 			this.play();
 			return this;
 		}
@@ -258,6 +288,12 @@
 		if (!deattached) this.nodes.push(gain);
 		return gain;
 	};
+
+
+/////////////////
+//////////////// TODO: implement loops
+////////////////
+
 
 	//adds anylyzer node to chain and returns it
 	AudioPlus.prototype.createAnalyser = function(size) {
@@ -337,7 +373,7 @@
 		return canvas;
 	};
 
-	//creates a level view. returnns a <canvas> element
+	//creates a level view. returns a <canvas> element
 	AudioPlus.prototype.createLevelView = function() {
 		var analyser = this.createAnalyser(32),
 			canvas = document.createElement("canvas"),
@@ -373,6 +409,7 @@
 
 		return canvas;
 	};
+
 
 	window.AudioPlus = AudioPlus;
 
